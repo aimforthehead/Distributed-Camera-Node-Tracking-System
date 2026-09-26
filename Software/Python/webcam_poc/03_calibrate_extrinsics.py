@@ -50,14 +50,14 @@ def main() -> None:
     sq = args.square
     calib_dir = args.calib_dir
 
-    for cam in [0, 1]:
+    for cam in [args.cam0, args.cam1]:
         f = calib_dir / f"cam{cam}_intrinsics.npz"
         if not f.exists():
             print(f"ERROR: {f} not found — run 02_calibrate_intrinsics.py --camera {cam} first.")
             sys.exit(1)
 
-    d0 = np.load(calib_dir / "cam0_intrinsics.npz")
-    d1 = np.load(calib_dir / "cam1_intrinsics.npz")
+    d0 = np.load(calib_dir / f"cam{args.cam0}_intrinsics.npz")
+    d1 = np.load(calib_dir / f"cam{args.cam1}_intrinsics.npz")
     K0, dist0 = d0["K"], d0["dist"]
     K1, dist1 = d1["K"], d1["dist"]
     img_size = tuple(d0["img_size"].tolist())  # (width, height)
