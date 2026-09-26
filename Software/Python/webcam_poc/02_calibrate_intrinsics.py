@@ -21,6 +21,7 @@ Controls:
 
 Output: calibration/camN_intrinsics.npz  →  K, dist, img_size, rms
 """
+from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path

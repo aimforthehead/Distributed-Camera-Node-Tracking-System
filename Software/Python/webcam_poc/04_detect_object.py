@@ -12,6 +12,7 @@ Usage:
 
 Output: calibration/hsv_params.json  →  h_low/high, s_low/high, v_low/high
 """
+from __future__ import annotations
 import argparse
 import json
 from pathlib import Path

@@ -10,6 +10,7 @@ Controls:
     Q — quit
     S — save snapshot of both frames
 """
+from __future__ import annotations
 import argparse
 import sys
 import cv2

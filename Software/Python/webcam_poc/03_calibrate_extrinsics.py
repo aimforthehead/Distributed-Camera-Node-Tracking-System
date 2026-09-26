@@ -24,6 +24,7 @@ Output: calibration/stereo.npz
     baseline_mm           — measured distance between camera optical centres
     img_size              — (width, height)
 """
+from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path

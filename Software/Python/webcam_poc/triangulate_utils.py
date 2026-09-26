@@ -2,28 +2,62 @@
 Shared utilities for the webcam triangulation POC.
 Imported by 05_triangulate.py and 06_accuracy_check.py.
 """
+from __future__ import annotations
 import json
 from pathlib import Path
 import cv2
 import numpy as np
 
 
-def load_calibration(calib_dir: Path) -> tuple[dict, dict]:
-    """Load stereo calibration and HSV params. Raises FileNotFoundError with clear message."""
+def load_calibration(calib_dir: Path, need_hsv: bool = True) -> tuple[dict, dict | None]:
+    """Load stereo calibration and (optionally) HSV params."""
     stereo_file = calib_dir / "stereo.npz"
     hsv_file = calib_dir / "hsv_params.json"
     if not stereo_file.exists():
         raise FileNotFoundError(
             f"{stereo_file} not found — run 02_calibrate_intrinsics.py then 03_calibrate_extrinsics.py first"
         )
+    stereo = np.load(stereo_file)
+    if not need_hsv:
+        return stereo, None
     if not hsv_file.exists():
         raise FileNotFoundError(
             f"{hsv_file} not found — run 04_detect_object.py first"
         )
-    stereo = np.load(stereo_file)
     with open(hsv_file) as f:
         hsv = json.load(f)
     return stereo, hsv
+
+
+class MotionDetector:
+    """
+    Detects the largest moving object against a static background (sky, wall, ceiling).
+
+    Uses MOG2 background subtraction: each pixel keeps a statistical model of its
+    usual value; pixels that suddenly differ are flagged as foreground. Needs a
+    fixed camera. One instance per camera, because each keeps its own background model.
+    """
+
+    def __init__(self, min_area: int = 80, history: int = 300, var_threshold: float = 32):
+        self.bg = cv2.createBackgroundSubtractorMOG2(
+            history=history, varThreshold=var_threshold, detectShadows=False
+        )
+        self.min_area = min_area
+        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+    def __call__(self, frame: np.ndarray) -> tuple[np.ndarray, tuple | None]:
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        mask = self.bg.apply(blurred)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
+        # Merge fragments of one object (propellers, arms) into a single blob
+        mask = cv2.dilate(mask, self.kernel, iterations=2)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours = [c for c in contours if cv2.contourArea(c) >= self.min_area]
+        if not contours:
+            return mask, None
+        best = max(contours, key=cv2.contourArea)
+        m = cv2.moments(best)
+        return mask, (m["m10"] / m["m00"], m["m01"] / m["m00"])
 
 
 def detect_ball(frame: np.ndarray, hsv_params: dict) -> tuple[np.ndarray | None, tuple | None]:
