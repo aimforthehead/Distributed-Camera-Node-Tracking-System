@@ -140,19 +140,53 @@ def main() -> None:
         sys.exit(1)
 
     print(f"\nCalibrating with {len(objpoints)} frames ...")
-    rms, K, dist, _rvecs, _tvecs = cv2.calibrateCamera(
-        objpoints, imgpoints, img_size, None, None
-    )
+    rms, K, dist, dropped = calibrate(objpoints, imgpoints, img_size)
+    if dropped:
+        print(f"  Dropped {dropped} blurry/shaky captures and recalibrated without them")
+    w, h = img_size
+    hfov = 2 * np.degrees(np.arctan(w / 2 / K[0, 0]))
     print(f"  RMS reprojection error : {rms:.4f} px")
-    print(f"  Focal length           : fx={K[0,0]:.1f}  fy={K[1,1]:.1f} px")
-    print(f"  Principal point        : ({K[0,2]:.1f}, {K[1,2]:.1f})")
-    print(f"  Distortion k1,k2,p1,p2 : {dist.flatten()[:4]}")
+    print(f"  Focal length           : fx={K[0,0]:.1f}  fy={K[1,1]:.1f} px  "
+          f"(horizontal field of view {hfov:.0f}°)")
+    print(f"  Principal point        : ({K[0,2]:.1f}, {K[1,2]:.1f})  (image centre {w/2:.0f}, {h/2:.0f})")
+    print(f"  Distortion k1,k2       : {dist.flatten()[:2]}")
 
-    if rms > 1.0:
-        print("WARNING: RMS > 1.0 px — consider recapturing with more varied angles.")
+    off_centre = max(abs(K[0, 2] - w / 2) / w, abs(K[1, 2] - h / 2) / h)
+    if rms > 2.0 or off_centre > 0.15 or abs(dist.flatten()[1]) > 3:
+        print("RESULT: REDO — hold the board sharper/steadier (for fixed-focus cameras stay ≥ 40 cm away), "
+              "cover all four corners of the view and tilt more.")
+    elif rms > 1.0:
+        print("RESULT: OK for the prototype (RMS under 2 px).")
+    else:
+        print("RESULT: GOOD.")
 
     np.savez(out_file, K=K, dist=dist, img_size=np.array(img_size), rms=np.array(rms))
     print(f"Saved → {out_file}")
+
+
+def calibrate(objpoints, imgpoints, img_size):
+    """
+    Webcam-constrained calibration: square pixels, no tangential distortion, no k3.
+    Fewer free parameters keeps blurry hand-held captures from producing absurd lens
+    models. Captures whose error is far above the rest are dropped and the fit redone.
+    """
+    w, h = img_size
+    flags = (cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_ASPECT_RATIO |
+             cv2.CALIB_ZERO_TANGENT_DIST | cv2.CALIB_FIX_K3)
+    K0 = np.array([[w, 0, w / 2], [0, w, h / 2], [0, 0, 1]], np.float64)
+
+    def run(obj, img):
+        rms, K, dist, _r, _t, _si, _se, per_view = cv2.calibrateCameraExtended(
+            obj, img, img_size, K0.copy(), np.zeros(5), flags=flags)
+        return rms, K, dist, per_view.ravel()
+
+    rms, K, dist, per_view = run(objpoints, imgpoints)
+    keep = per_view <= max(2.0 * np.median(per_view), 1.0)
+    if keep.sum() >= 8 and not keep.all():
+        obj = [o for o, k in zip(objpoints, keep) if k]
+        img = [i for i, k in zip(imgpoints, keep) if k]
+        rms, K, dist, _ = run(obj, img)
+    return rms, K, dist, int((~keep).sum()) if keep.sum() >= 8 else 0
 
 
 if __name__ == "__main__":
