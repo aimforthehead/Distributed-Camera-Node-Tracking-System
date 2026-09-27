@@ -212,30 +212,44 @@ def aim_hint(cell: tuple[int, int]) -> str:
     return " + ".join(moves) if moves else "point camera straight at the board"
 
 
-def draw_guide(canvas, frame_shape, corners, board, hits, target_cell, state, progress,
+def board_quad(corners, board) -> np.ndarray:
+    pts = corners.reshape(-1, 2)
+    return pts[[0, board[0] - 1, len(pts) - 1, len(pts) - board[0]]]
+
+
+def draw_guide(canvas, frame, corners, board, hits, target_cell, state, progress,
                n, target, viewpoint) -> np.ndarray:
     img = canvas.copy()
     font = cv2.FONT_HERSHEY_SIMPLEX
     px, pw = PANEL_X + 30, CANVAS_W - PANEL_X - 60
-    h, w = frame_shape[:2]
+    h, w = frame.shape[:2]
     ph, top = int(pw * h / w), 100
-    cv2.putText(img, "WHAT THE CAMERA SEES", (px, 70), font, 0.75, (60, 60, 60), 2, cv2.LINE_AA)
+    cv2.putText(img, "LIVE CAMERA VIEW", (px, 70), font, 0.75, (60, 60, 60), 2, cv2.LINE_AA)
+
+    # Live view, blurred, with the board painted over: the camera must never see a
+    # small copy of the checkerboard in its own preview.
+    thumb = cv2.GaussianBlur(cv2.resize(frame, (pw, ph)), (7, 7), 0)
+    if corners is not None:
+        q = board_quad(corners, board)
+        q = (q - q.mean(axis=0)) * 1.25 + q.mean(axis=0)
+        q = np.column_stack([q[:, 0] / w * pw, q[:, 1] / h * ph]).astype(np.int32)
+        cv2.fillPoly(thumb, [q], (60, 190, 60))
+    tint = thumb.copy()
     for gy in range(3):
         for gx in range(3):
-            x1, y1 = px + gx * pw // 3, top + gy * ph // 3
-            x2, y2 = px + (gx + 1) * pw // 3, top + (gy + 1) * ph // 3
+            x1, y1, x2, y2 = gx * pw // 3, gy * ph // 3, (gx + 1) * pw // 3, (gy + 1) * ph // 3
             if hits[gy][gx]:
-                cv2.rectangle(img, (x1, y1), (x2, y2), (190, 235, 190), -1)
-            cv2.rectangle(img, (x1, y1), (x2, y2), (210, 210, 210), 1)
+                cv2.rectangle(tint, (x1, y1), (x2, y2), (120, 230, 120), -1)
+            cv2.rectangle(tint, (x1, y1), (x2, y2), (230, 230, 230), 1)
+    img[top:top + ph, px:px + pw] = cv2.addWeighted(tint, 0.35, thumb, 0.65, 0)
     tx, ty = target_cell
     cv2.rectangle(img, (px + tx * pw // 3 + 3, top + ty * ph // 3 + 3),
                   (px + (tx + 1) * pw // 3 - 3, top + (ty + 1) * ph // 3 - 3), (0, 200, 255), 5)
     cv2.rectangle(img, (px, top), (px + pw, top + ph), (40, 40, 40), 2)
     if corners is not None:
-        pts = corners.reshape(-1, 2)
-        quad = pts[[0, board[0] - 1, len(pts) - 1, len(pts) - board[0]]]
+        quad = board_quad(corners, board)
         quad = np.column_stack([px + quad[:, 0] / w * pw, top + quad[:, 1] / h * ph]).astype(np.int32)
-        cv2.polylines(img, [quad], True, (0, 170, 0), 4, cv2.LINE_AA)
+        cv2.polylines(img, [quad], True, (0, 120, 0), 4, cv2.LINE_AA)
 
     text, color = {
         "none": ("BOARD NOT IN VIEW", (0, 0, 220)),
@@ -248,7 +262,7 @@ def draw_guide(canvas, frame_shape, corners, board, hits, target_cell, state, pr
     bar = int(pw * (progress if state == "hold" else (1.0 if state == "captured" else 0)))
     cv2.rectangle(img, (px, y + 18), (px + bar, y + 30), color, -1)
     cv2.putText(img, f"{n} / {target} captured", (px, y + 75), font, 0.9, (40, 40, 40), 2, cv2.LINE_AA)
-    lines = ["Move the camera until the green", "outline sits in the yellow box:",
+    lines = ["Move the camera until the green", "board sits in the yellow box:",
              f"  {aim_hint(target_cell)}", "", "View the screen:", f"  {viewpoint}", "",
              "Set the camera down, wait for", "the beep, then move it again.", "", "Q = quit"]
     for i, line in enumerate(lines):
@@ -275,6 +289,11 @@ def run_screen_mode(cap, board, target, subpix, cam_idx):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         found, corners = cv2.findChessboardCorners(gray, board, None)
         if found:
+            # The real on-screen board is large in the view; anything tiny is a reflection
+            # or the preview itself, so ignore it.
+            q = board_quad(corners, board)
+            found = np.ptp(q[:, 0]) > 0.08 * frame.shape[1]
+        if found:
             corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), subpix)
         shoot, state, progress = auto.update([corners] if found else None, [frame.shape[1]], time.time())
         if shoot:
@@ -285,7 +304,7 @@ def run_screen_mode(cap, board, target, subpix, cam_idx):
             print(f"  Captured frame {len(imgpoints)}/{target}")
         target_cell = min(CELL_ORDER, key=lambda cell: (hits[cell[1]][cell[0]], CELL_ORDER.index(cell)))
         viewpoint = VIEWPOINTS[len(imgpoints) % len(VIEWPOINTS)]
-        cv2.imshow(win, draw_guide(canvas, frame.shape, corners if found else None, board, hits,
+        cv2.imshow(win, draw_guide(canvas, frame, corners if found else None, board, hits,
                                    target_cell, state, progress, len(imgpoints), target, viewpoint))
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
