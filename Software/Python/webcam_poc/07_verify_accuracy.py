@@ -32,7 +32,8 @@ import cv2
 import numpy as np
 
 from triangulate_utils import (load_calibration, triangulate_point, reprojection_error,
-                               AutoCapture, beep, draw_auto_status, check_frame_size)
+                               AutoCapture, beep, draw_auto_status, check_frame_size,
+                               canonical_corners, refine_corners)
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -133,7 +134,6 @@ def main() -> None:
     check_frame_size(cap0, stereo["img_size"], f"camera {args.cam0}")
     if "img_size1" in stereo.files:
         check_frame_size(cap1, stereo["img_size1"], f"camera {args.cam1}")
-    subpix = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
     results: list[dict] = []
 
     print("Hold the board where BOTH cameras see it, keep it still, press SPACE.")
@@ -181,8 +181,8 @@ def main() -> None:
         if (shoot or key == ord(" ")) and both:
             if shoot:
                 beep()
-            c0 = cv2.cornerSubPix(g0, c0, (11, 11), (-1, -1), subpix)
-            c1 = cv2.cornerSubPix(g1, c1, (11, 11), (-1, -1), subpix)
+            c0 = canonical_corners(g0, refine_corners(g0, c0, board), board)
+            c1 = canonical_corners(g1, refine_corners(g1, c1, board), board)
             r = measure_board(c0, c1, stereo, board, args.square)
             print(f"\n#{len(results) + 1}: range {r['range_mm'] / 1000:.2f} m | "
                   f"length error {r['span_err_pct']:.2f} % | spacing error "

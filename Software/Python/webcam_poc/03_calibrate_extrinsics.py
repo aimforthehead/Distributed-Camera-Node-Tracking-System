@@ -33,7 +33,8 @@ import cv2
 import numpy as np
 
 from triangulate_utils import (print_rig_geometry, AutoCapture, beep, draw_auto_status,
-                               check_frame_size)
+                               check_frame_size, canonical_corners, consistent_pairs,
+                               refine_corners)
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -82,7 +83,6 @@ def main() -> None:
     cap1 = cv2.VideoCapture(args.cam1)
     check_frame_size(cap0, d0["img_size"], f"camera {args.cam0}")
     check_frame_size(cap1, d1["img_size"], f"camera {args.cam1}")
-    subpix = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
     print(f"Board {board_w}×{board_h}  |  Square {sq} mm")
     print("Both cameras must see the board SIMULTANEOUSLY.")
@@ -107,10 +107,12 @@ def main() -> None:
         c0r = c1r = None
 
         if found0:
-            c0r = cv2.cornerSubPix(gray0, corners0, (11, 11), (-1, -1), subpix)
+            c0r = canonical_corners(gray0, refine_corners(gray0, corners0, (board_w, board_h)),
+                                    (board_w, board_h))
             cv2.drawChessboardCorners(disp0, (board_w, board_h), c0r, True)
         if found1:
-            c1r = cv2.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), subpix)
+            c1r = canonical_corners(gray1, refine_corners(gray1, corners1, (board_w, board_h)),
+                                    (board_w, board_h))
             cv2.drawChessboardCorners(disp1, (board_w, board_h), c1r, True)
 
         both = found0 and found1
@@ -166,7 +168,20 @@ def main() -> None:
         print("Not enough pairs — exiting without saving.")
         sys.exit(1)
 
-    print(f"\nRunning stereo calibration with {len(objpoints)} pairs ...")
+    keep, baselines = consistent_pairs(objpoints, imgpoints0, imgpoints1, K0, dist0, K1, dist1)
+    print(f"\nCaptures that agree with each other: {int(keep.sum())} / {len(keep)}")
+    print("  per-capture baseline (mm): " + ", ".join(
+        f"{b:.0f}{'' if k else '✗'}" for b, k in zip(baselines, keep)))
+    if keep.sum() < 6:
+        print("RESULT: REJECTED — captures disagree. Usually the board was moving, or a camera")
+        print("  also saw the board on the laptop screen. Keep the laptop screen out of both views,")
+        print("  prop the phone still, and retry. NOT saved.")
+        sys.exit(1)
+    objpoints = [o for o, k in zip(objpoints, keep) if k]
+    imgpoints0 = [p for p, k in zip(imgpoints0, keep) if k]
+    imgpoints1 = [p for p, k in zip(imgpoints1, keep) if k]
+
+    print(f"Running stereo calibration with {len(objpoints)} pairs ...")
     # CALIB_FIX_INTRINSIC: trust the per-camera calibrations from step 02,
     # only solve for R and T between the two cameras.
     rms, K0_o, dist0_o, K1_o, dist1_o, R, T, E, F = cv2.stereoCalibrate(

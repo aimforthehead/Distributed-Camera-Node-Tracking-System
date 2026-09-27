@@ -37,7 +37,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from triangulate_utils import AutoCapture, beep, draw_auto_status
+from triangulate_utils import AutoCapture, beep, draw_auto_status, refine_corners
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -106,7 +106,7 @@ def main() -> None:
 
         display = frame.copy()
         if found:
-            corners_sub = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), subpix_criteria)
+            corners_sub = refine_corners(gray, corners, (board_w, board_h))
             cv2.drawChessboardCorners(display, (board_w, board_h), corners_sub, True)
 
         if not args.manual:
@@ -294,7 +294,7 @@ def run_screen_mode(cap, board, target, subpix, cam_idx):
             q = board_quad(corners, board)
             found = np.ptp(q[:, 0]) > 0.08 * frame.shape[1]
         if found:
-            corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), subpix)
+            corners = refine_corners(gray, corners, board)
         shoot, state, progress = auto.update([corners] if found else None, [frame.shape[1]], time.time())
         if shoot:
             imgpoints.append(corners)

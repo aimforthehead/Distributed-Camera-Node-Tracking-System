@@ -273,3 +273,76 @@ def check_frame_size(cap, expected, label: str) -> None:
         print("  The camera numbers probably changed (replug). Run 01_check_cameras.py,")
         print("  find which index is which camera, and pass the right --cam0/--cam1.")
         sys.exit(1)
+
+
+def canonical_corners(gray: np.ndarray, corners: np.ndarray, board: tuple[int, int]) -> np.ndarray:
+    """
+    Reorder detected corners so corner 0 is always the same physical corner of the board.
+
+    OpenCV may start numbering from either end of the board, so two cameras can label
+    the same corner differently. The board's outer top-left square is black (the board
+    images used here all follow that), and a board seen from the front is never mirrored,
+    so exactly one of the four possible orderings has (a) a dark square diagonally outside
+    corner 0 and (b) rows running clockwise from columns in image coordinates.
+    """
+    cols, rows = board
+    g = corners.reshape(rows, cols, 2)
+    h, w = gray.shape[:2]
+
+    def mean_at(p, r):
+        x, y = int(round(p[0])), int(round(p[1]))
+        patch = gray[max(0, y - r):min(h, y + r + 1), max(0, x - r):min(w, x + r + 1)]
+        return float(patch.mean()) if patch.size else None
+
+    for c in (g, g[::-1, ::-1], g[:, ::-1], g[::-1, :]):
+        a, b = c[0, 1] - c[0, 0], c[1, 0] - c[0, 0]
+        if a[0] * b[1] - a[1] * b[0] <= 0:
+            continue
+        r = max(1, int(0.15 * min(np.linalg.norm(a), np.linalg.norm(b))))
+        outside = mean_at(c[0, 0] - 0.5 * a - 0.5 * b, r)
+        beside = mean_at(c[0, 0] + 0.5 * a - 0.5 * b, r)
+        if outside is not None and beside is not None and outside < beside:
+            return np.ascontiguousarray(c.reshape(-1, 1, 2), dtype=corners.dtype)
+    return corners
+
+
+def consistent_pairs(objpoints, imgpoints0, imgpoints1, K0, d0, K1, d1,
+                     max_deg: float = 2.0, max_shift: float = 0.08) -> tuple[np.ndarray, list]:
+    """
+    Each stereo capture implies its own camera-1-relative-to-camera-0 pose (solvePnP in
+    each camera). Keep the largest group of captures that agree with each other;
+    a flipped or wrongly detected board produces a pose far from the rest.
+    Returns (keep_mask, per-capture baselines in mm).
+    """
+    poses = []
+    for obj, a, b in zip(objpoints, imgpoints0, imgpoints1):
+        _, r0, t0 = cv2.solvePnP(obj, a, K0, d0)
+        _, r1, t1 = cv2.solvePnP(obj, b, K1, d1)
+        R0, R1 = cv2.Rodrigues(r0)[0], cv2.Rodrigues(r1)[0]
+        R = R1 @ R0.T
+        poses.append((R, (t1 - R @ t0).ravel()))
+
+    def agree(i, j):
+        (Ri, Ti), (Rj, Tj) = poses[i], poses[j]
+        ang = np.degrees(np.linalg.norm(cv2.Rodrigues(Ri @ Rj.T)[0]))
+        return ang < max_deg and np.linalg.norm(Ti - Tj) < max_shift * max(np.linalg.norm(Ti), 1e-9)
+
+    n = len(poses)
+    best = max(range(n), key=lambda i: sum(agree(i, j) for j in range(n)))
+    keep = np.array([agree(best, j) for j in range(n)])
+    return keep, [float(np.linalg.norm(T)) for _, T in poses]
+
+
+def refine_corners(gray: np.ndarray, corners: np.ndarray, board: tuple[int, int]) -> np.ndarray:
+    """
+    Sub-pixel corner refinement with a search window sized to the squares in the image.
+    A fixed 11x11 window is larger than a square once the board is ~1 m away, and the
+    corners then snap to the wrong place (several px of error).
+    """
+    cols, rows = board
+    g = corners.reshape(rows, cols, 2)
+    spacing = np.median(np.concatenate([np.linalg.norm(np.diff(g, axis=1), axis=2).ravel(),
+                                        np.linalg.norm(np.diff(g, axis=0), axis=2).ravel()]))
+    win = int(max(2, min(11, spacing * 0.3)))
+    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    return cv2.cornerSubPix(gray, corners, (win, win), (-1, -1), crit)
