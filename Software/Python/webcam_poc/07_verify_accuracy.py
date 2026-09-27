@@ -109,6 +109,20 @@ def print_report(results: list[dict], square: float) -> None:
     if tapes:
         print(f"Absolute range error: {np.mean([r['tape_err_pct'] for r in tapes]):.1f} % mean "
               f"({len(tapes)} tape-measured)")
+    reproj = float(np.median([r["reproj_mean_px"] for r in results]))
+    problems = []
+    if reproj > 5:
+        problems.append(f"reprojection {reproj:.0f} px (should be under ~3): the cameras moved or "
+                        "refocused since step 03 — redo step 03 and don't touch them afterwards")
+    if span > 8:
+        problems.append(f"lengths off by {span:.0f}%: the board is not the size it was in step 03 "
+                        "(phone zoom/rotation changed, or a different --square) — keep the phone image "
+                        "untouched between step 03 and this check")
+    if problems:
+        print("\nRESULT: NOT VALID FOR THE PROPOSAL")
+        for p in problems:
+            print(f"  - {p}")
+        return
     print("\nProposal line:")
     print(f"  \"At {min(rng):.1f}–{max(rng):.1f} m, the two-camera prototype measured known "
           f"lengths to within {span:.1f} % ({spacing:.1f} mm mean corner error).\"")
