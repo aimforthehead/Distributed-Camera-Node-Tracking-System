@@ -152,3 +152,23 @@ def reprojection_error(X: np.ndarray, pt0: tuple, pt1: tuple, stereo) -> float:
     e0 = np.linalg.norm(p0.ravel() - np.asarray(pt0, float))
     e1 = np.linalg.norm(p1.ravel() - np.asarray(pt1, float))
     return float(max(e0, e1))
+
+
+def print_rig_geometry(R: np.ndarray, T: np.ndarray) -> None:
+    """Print the measured camera layout: convergence, height difference, where the axes cross."""
+    c1 = (-R.T @ T).ravel()
+    axis1 = R.T @ np.array([0.0, 0.0, 1.0])
+    convergence = np.degrees(np.arccos(np.clip(axis1[2], -1.0, 1.0)))
+    yaw1 = np.degrees(np.arctan2(axis1[0], axis1[2]))
+    print(f"  Convergence      : {convergence:.1f}° between the two optical axes "
+          f"(cam1 yawed {yaw1:+.1f}° relative to cam0)")
+    print(f"  Height difference: {-c1[1]:+.0f} mm (cam1 relative to cam0, + = higher)")
+    d0, d1, w = np.array([0.0, 0.0, 1.0]), axis1, -c1
+    a, b, c, d, e = d0 @ d0, d0 @ d1, d1 @ d1, d0 @ w, d1 @ w
+    denom = a * c - b * b
+    if denom > 1e-9:
+        s = (b * e - c * d) / denom
+        u = (a * e - b * d) / denom
+        aim = (s * d0 + c1 + u * d1) / 2
+        if aim[2] > 0:
+            print(f"  Axes cross at    : {aim[2] / 10:.0f} cm in front of cam0")

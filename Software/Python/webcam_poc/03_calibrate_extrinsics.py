@@ -31,6 +31,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from triangulate_utils import print_rig_geometry
+
 
 def parse_board(s: str) -> tuple[int, int]:
     parts = s.lower().split('x')
@@ -154,25 +156,7 @@ def main() -> None:
     print(f"  Stereo RMS error : {rms:.4f} px")
     print(f"  Baseline         : {baseline:.1f} mm  ({baseline/10:.1f} cm)")
 
-    # Measured rig geometry, in camera 0's frame
-    c1 = (-R.T @ T).ravel()
-    axis1 = R.T @ np.array([0.0, 0.0, 1.0])
-    convergence = np.degrees(np.arccos(np.clip(axis1[2], -1.0, 1.0)))
-    yaw1 = np.degrees(np.arctan2(axis1[0], axis1[2]))
-    print(f"  Convergence      : {convergence:.1f}° between the two optical axes "
-          f"(cam1 yawed {yaw1:+.1f}° relative to cam0)")
-    print(f"  Height difference: {-c1[1]:+.0f} mm (cam1 relative to cam0, + = higher)")
-    # Where the two optical axes pass closest to each other (the aim point)
-    d0, d1 = np.array([0.0, 0.0, 1.0]), axis1
-    w = -c1
-    a, b, c, d, e = d0 @ d0, d0 @ d1, d1 @ d1, d0 @ w, d1 @ w
-    denom = a * c - b * b
-    if denom > 1e-9:
-        s = (b * e - c * d) / denom
-        u = (a * e - b * d) / denom
-        aim = (s * d0 + c1 + u * d1) / 2
-        if aim[2] > 0:
-            print(f"  Axes cross at    : {aim[2] / 10:.0f} cm in front of cam0")
+    print_rig_geometry(R, T)
 
     if rms > 1.5:
         print("WARNING: RMS > 1.5 px — consider recapturing; make sure the board fills the frame.")
