@@ -74,6 +74,8 @@ def main() -> None:
     parser.add_argument("--baseline-mm", type=float, required=True,
                         help="Lens-to-lens distance measured with a ruler, in mm")
     parser.add_argument("--min-area", type=int, default=80)
+    parser.add_argument("--target", type=int, default=250,
+                        help="Auto-compute once this many samples and 12/16 coverage are reached")
     parser.add_argument("--calib_dir", type=Path, default=Path("calibration"))
     args = parser.parse_args()
 
@@ -146,7 +148,10 @@ def main() -> None:
             views.append(v)
 
         ready = len(s0) >= 60
-        banner_txt = (f"samples {len(s0)}   {status}   "
+        if len(s0) >= args.target and min(coverage) >= 12:
+            print("Enough samples and coverage — computing automatically.")
+            break
+        banner_txt = (f"samples {len(s0)}/{args.target}   {status}   "
                       f"{'C = compute' if ready else 'need 60+ samples'}   X = clear   Q = quit")
         h = min(views[0].shape[0], views[1].shape[0], 480)
         resized = [cv2.resize(v, (int(v.shape[1] * h / v.shape[0]), h)) for v in views]

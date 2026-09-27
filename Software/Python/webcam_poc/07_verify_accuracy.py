@@ -13,8 +13,12 @@ every distance).
 Usage:
     python 07_verify_accuracy.py --cam0 0 --cam1 1 --board 9x6 --square 8
 
+Hands-free by default: hold the board still and it measures automatically, then
+move it to a new distance/angle. Report prints after --target measurements.
+Use --manual to press SPACE yourself and type tape-measured distances.
+
 Controls:
-    SPACE — measure the board at its current position (hold it still)
+    SPACE — measure now
     Q     — quit and print the accuracy report
 
 Output: accuracy_report.json and a printed summary for the proposal.
@@ -27,7 +31,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from triangulate_utils import load_calibration, triangulate_point, reprojection_error
+from triangulate_utils import (load_calibration, triangulate_point, reprojection_error,
+                               AutoCapture, beep, draw_auto_status)
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -116,6 +121,9 @@ def main() -> None:
     parser.add_argument("--square", type=float, required=True, help="Square size in mm")
     parser.add_argument("--calib_dir", type=Path, default=Path("calibration"))
     parser.add_argument("--out", type=Path, default=Path("accuracy_report.json"))
+    parser.add_argument("--target", type=int, default=6, help="Measurements before the report")
+    parser.add_argument("--manual", action="store_true",
+                        help="Press SPACE to measure and enter tape distances")
     args = parser.parse_args()
 
     stereo, _ = load_calibration(args.calib_dir, need_hsv=False)
@@ -127,6 +135,7 @@ def main() -> None:
 
     print("Hold the board where BOTH cameras see it, keep it still, press SPACE.")
     print("Measure at several distances and angles. Q = quit and print the report.")
+    auto = AutoCapture(min_change=0.08)
 
     while True:
         cap0.grab()
@@ -146,12 +155,19 @@ def main() -> None:
         if found1:
             cv2.drawChessboardCorners(d1, board, c1, True)
         both = found0 and found1
-        msg = "BOTH SEE BOARD - hold still, SPACE" if both else "board must be visible in both cameras"
+        shoot = False
+        if not args.manual:
+            shoot, state, progress = auto.update([c0, c1] if both else None,
+                                                 [f0.shape[1], f1.shape[1]], time.time())
+        msg = "BOTH SEE BOARD - hold still" if both else "board must be visible in both cameras"
         for d in (d0, d1):
             cv2.putText(d, msg, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
                         (0, 220, 0) if both else (0, 0, 220), 2)
             cv2.putText(d, f"measurements: {len(results)}", (10, 62),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 220), 2)
+        if not args.manual:
+            for d in (d0, d1):
+                draw_auto_status(d, state, progress, len(results), args.target)
         h = min(d0.shape[0], d1.shape[0], 480)
         views = [cv2.resize(d, (int(d.shape[1] * h / d.shape[0]), h)) for d in (d0, d1)]
         cv2.imshow("Step 7 — Accuracy Check  |  SPACE=measure  Q=report", np.hstack(views))
@@ -159,7 +175,9 @@ def main() -> None:
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
-        if key == ord(" ") and both:
+        if (shoot or key == ord(" ")) and both:
+            if shoot:
+                beep()
             c0 = cv2.cornerSubPix(g0, c0, (11, 11), (-1, -1), subpix)
             c1 = cv2.cornerSubPix(g1, c1, (11, 11), (-1, -1), subpix)
             r = measure_board(c0, c1, stereo, board, args.square)
@@ -167,7 +185,8 @@ def main() -> None:
                   f"length error {r['span_err_pct']:.2f} % | spacing error "
                   f"{r['spacing_mean_err_mm']:.2f} mm | flatness {r['planarity_rms_mm']:.2f} mm | "
                   f"reprojection {r['reproj_mean_px']:.1f} px")
-            tape = input("  Tape-measured distance CAM 0 lens → board centre in mm (Enter to skip): ").strip()
+            tape = (input("  Tape-measured distance CAM 0 lens → board centre in mm (Enter to skip): ").strip()
+                    if args.manual else "")
             if tape:
                 try:
                     true_range = float(tape)
@@ -179,6 +198,8 @@ def main() -> None:
                     print("  Not a number — skipped.")
             r["timestamp"] = time.time()
             results.append(r)
+            if not args.manual and len(results) >= args.target:
+                break
 
     cap0.release()
     cap1.release()

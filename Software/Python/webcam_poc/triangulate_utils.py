@@ -4,6 +4,8 @@ Imported by 05_triangulate.py and 06_accuracy_check.py.
 """
 from __future__ import annotations
 import json
+import subprocess
+import sys
 from pathlib import Path
 import cv2
 import numpy as np
@@ -172,3 +174,87 @@ def print_rig_geometry(R: np.ndarray, T: np.ndarray) -> None:
         aim = (s * d0 + c1 + u * d1) / 2
         if aim[2] > 0:
             print(f"  Axes cross at    : {aim[2] / 10:.0f} cm in front of cam0")
+
+
+def beep() -> None:
+    """Audible confirmation, so the person holding the board knows a capture happened."""
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["afplay", "/System/Library/Sounds/Tink.aiff"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            print("\a", end="", flush=True)
+    except OSError:
+        pass
+
+
+class AutoCapture:
+    """
+    Hands-free capture: fires when the board has been held still for `hold_s` seconds
+    at a position that differs enough from every previous capture.
+
+    Feed it the detected corners of every camera (or None if any camera lacks the board).
+    Corners are normalised by image width so thresholds work at any resolution.
+    """
+
+    def __init__(self, hold_s: float = 0.8, still_tol: float = 0.004,
+                 min_change: float = 0.05, cooldown_s: float = 1.0):
+        self.hold_s, self.still_tol = hold_s, still_tol
+        self.min_change, self.cooldown_s = min_change, cooldown_s
+        self.prev = None
+        self.still_since = None
+        self.last_capture = -1e9
+        self.shots: list[np.ndarray] = []
+
+    def update(self, corner_sets, widths, t: float) -> tuple[bool, str, float]:
+        """Returns (capture_now, state, hold_progress); state is none/move/hold/captured."""
+        if corner_sets is None:
+            self.prev = self.still_since = None
+            return False, "none", 0.0
+        c = np.vstack([cs.reshape(-1, 2) / w for cs, w in zip(corner_sets, widths)])
+        still = (self.prev is not None and self.prev.shape == c.shape and
+                 np.mean(np.linalg.norm(c - self.prev, axis=1)) < self.still_tol)
+        if still:
+            if self.still_since is None:
+                self.still_since = t
+        else:
+            self.still_since = None
+        self.prev = c
+        if t - self.last_capture < self.cooldown_s:
+            return False, "captured", 1.0
+        if any(np.mean(np.linalg.norm(c - s, axis=1)) < self.min_change for s in self.shots):
+            return False, "move", 0.0
+        if self.still_since is None:
+            return False, "hold", 0.0
+        progress = min((t - self.still_since) / self.hold_s, 1.0)
+        if progress >= 1.0:
+            self.shots.append(c)
+            self.last_capture = t
+            self.still_since = None
+            return True, "captured", 1.0
+        return False, "hold", progress
+
+
+def draw_auto_status(img: np.ndarray, state: str, progress: float, n: int, target: int) -> None:
+    """Large status band at the bottom of a view, readable from a couple of metres away."""
+    h, w = img.shape[:2]
+    sc = max(0.8, w / 1280)
+    text, color = {
+        "none": ("SHOW THE BOARD", (0, 0, 230)),
+        "move": ("MOVE OR TILT TO A NEW POSITION", (0, 200, 255)),
+        "hold": ("HOLD STILL...", (0, 230, 230)),
+        "captured": (f"CAPTURED {n}/{target}", (0, 230, 0)),
+    }[state]
+    band = int(100 * sc)
+    img[h - band:] = (img[h - band:] * 0.3).astype(np.uint8)
+    cv2.putText(img, text, (int(20 * sc), h - int(50 * sc)), cv2.FONT_HERSHEY_SIMPLEX,
+                1.3 * sc, color, max(2, int(3 * sc)), cv2.LINE_AA)
+    label = f"{n}/{target}"
+    (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1.3 * sc, 3)
+    cv2.putText(img, label, (w - tw - int(20 * sc), h - int(50 * sc)), cv2.FONT_HERSHEY_SIMPLEX,
+                1.3 * sc, (230, 230, 230), max(2, int(3 * sc)), cv2.LINE_AA)
+    bar_w = int((w - 40 * sc) * (progress if state == "hold" else (1.0 if state == "captured" else 0)))
+    y = h - int(25 * sc)
+    cv2.rectangle(img, (int(20 * sc), y), (int(20 * sc) + bar_w, y + int(10 * sc)), color, -1)
+    if state == "captured":
+        cv2.rectangle(img, (0, 0), (w - 1, h - 1), (0, 230, 0), max(6, int(12 * sc)))

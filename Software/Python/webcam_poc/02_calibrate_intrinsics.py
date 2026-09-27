@@ -14,9 +14,13 @@ Usage:
     --square  Physical square side length in mm (sets the unit of the 3D result)
     --output  Directory to save calibration files (default: calibration/)
 
+Hands-free by default: hold the board still for about a second and it captures
+automatically (beep + green flash), then move or tilt it to a new position.
+It calibrates by itself after --target captures (default 20).
+
 Controls:
-    SPACE — capture the current frame (only works when corners are detected)
-    C     — compute calibration (need ≥ 8 frames; ≥ 15 recommended)
+    SPACE — capture now (manual)
+    C     — compute calibration early (need ≥ 8 frames)
     Q     — quit without saving
 
 Output: calibration/camN_intrinsics.npz  →  K, dist, img_size, rms
@@ -24,9 +28,12 @@ Output: calibration/camN_intrinsics.npz  →  K, dist, img_size, rms
 from __future__ import annotations
 import argparse
 import sys
+import time
 from pathlib import Path
 import cv2
 import numpy as np
+
+from triangulate_utils import AutoCapture, beep, draw_auto_status
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -44,6 +51,8 @@ def main() -> None:
     parser.add_argument("--square", type=float, required=True,
                         help="Square size in mm")
     parser.add_argument("--output", type=Path, default=Path("calibration"))
+    parser.add_argument("--target", type=int, default=20, help="Captures before auto-calibrating")
+    parser.add_argument("--manual", action="store_true", help="Disable auto-capture")
     args = parser.parse_args()
 
     board_w, board_h = args.board
@@ -69,7 +78,9 @@ def main() -> None:
     img_size: tuple[int, int] | None = None
 
     print(f"Camera {args.camera}  |  Board {board_w}×{board_h}  |  Square {sq} mm")
+    print("Hold the board still to auto-capture; move/tilt between captures.")
     print("Controls: SPACE = capture  |  C = calibrate  |  Q = quit")
+    auto = AutoCapture()
     print("Tip: use ≥ 15 frames with varied angles and positions across the frame.")
 
     while True:
@@ -86,16 +97,23 @@ def main() -> None:
         if found:
             corners_sub = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), subpix_criteria)
             cv2.drawChessboardCorners(display, (board_w, board_h), corners_sub, True)
-            msg = f"FOUND — {len(objpoints)} captured  |  SPACE to grab"
-            color = (0, 220, 0)
-        else:
-            msg = f"Board not found — {len(objpoints)} captured"
-            color = (0, 0, 220)
 
-        cv2.putText(display, msg, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        if len(objpoints) >= 15:
-            cv2.putText(display, "Ready: press C to calibrate", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 220), 2)
+        if not args.manual:
+            shoot, state, progress = auto.update([corners_sub] if found else None,
+                                                 [frame.shape[1]], time.time())
+            if shoot:
+                objpoints.append(obj_tmpl.copy())
+                imgpoints.append(corners_sub)
+                beep()
+                print(f"  Captured frame {len(objpoints)}/{args.target}")
+                if len(objpoints) >= args.target:
+                    break
+            draw_auto_status(display, state, progress, len(objpoints), args.target)
+        else:
+            msg = (f"FOUND — {len(objpoints)} captured  |  SPACE to grab" if found
+                   else f"Board not found — {len(objpoints)} captured")
+            cv2.putText(display, msg, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 220, 0) if found else (0, 0, 220), 2)
 
         cv2.imshow(f"Step 2 — Intrinsic Calibration  Cam {args.camera}", display)
         key = cv2.waitKey(1) & 0xFF

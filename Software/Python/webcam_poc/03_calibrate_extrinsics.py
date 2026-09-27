@@ -27,11 +27,12 @@ Output: calibration/stereo.npz
 from __future__ import annotations
 import argparse
 import sys
+import time
 from pathlib import Path
 import cv2
 import numpy as np
 
-from triangulate_utils import print_rig_geometry
+from triangulate_utils import print_rig_geometry, AutoCapture, beep, draw_auto_status
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -46,6 +47,8 @@ def main() -> None:
     parser.add_argument("--board", type=parse_board, default=(9, 6), metavar="COLSxROWS")
     parser.add_argument("--square", type=float, required=True, help="Square size in mm")
     parser.add_argument("--calib_dir", type=Path, default=Path("calibration"))
+    parser.add_argument("--target", type=int, default=15, help="Pairs before auto-computing")
+    parser.add_argument("--manual", action="store_true", help="Disable auto-capture")
     args = parser.parse_args()
 
     board_w, board_h = args.board
@@ -78,7 +81,9 @@ def main() -> None:
 
     print(f"Board {board_w}×{board_h}  |  Square {sq} mm")
     print("Both cameras must see the board SIMULTANEOUSLY.")
+    print("Hold the board still in view of both cameras to auto-capture.")
     print("Controls: SPACE = capture pair  |  C = compute  |  Q = quit")
+    auto = AutoCapture()
 
     while True:
         cap0.grab()
@@ -104,12 +109,25 @@ def main() -> None:
             cv2.drawChessboardCorners(disp1, (board_w, board_h), c1r, True)
 
         both = found0 and found1
+        if not args.manual:
+            shoot, state, progress = auto.update([c0r, c1r] if both else None,
+                                                 [frame0.shape[1], frame1.shape[1]], time.time())
+            if shoot:
+                objpoints.append(obj_tmpl.copy())
+                imgpoints0.append(c0r)
+                imgpoints1.append(c1r)
+                beep()
+                print(f"  Captured pair {len(objpoints)}/{args.target}")
+                if len(objpoints) >= args.target:
+                    break
+            for disp in (disp0, disp1):
+                draw_auto_status(disp, state, progress, len(objpoints), args.target)
         for disp, found, label in [(disp0, found0, "Cam0"), (disp1, found1, "Cam1")]:
             status = "FOUND" if found else "not found"
             color = (0, 220, 0) if found else (0, 0, 220)
             cv2.putText(disp, f"{label}: {status}  pairs: {len(objpoints)}",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-            if both:
+            if both and args.manual:
                 cv2.putText(disp, "SPACE to capture", (10, 60),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 220), 2)
 
