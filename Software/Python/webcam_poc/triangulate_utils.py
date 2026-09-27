@@ -103,7 +103,7 @@ def triangulate_point(
          corrected pixel coords (undistortPoints with P=K applies K⁻¹ then K,
          net effect is just distortion removal in pixel space).
       2. DLT triangulation via cv2.triangulatePoints — solves the 4×4 system
-         formed by cross-multiplying p = P*X for both cameras (see MATH.md).
+         formed by cross-multiplying p = P*X for both cameras.
       3. Dehomogenize the result: divide XYZ by W.
 
     Args:
@@ -134,3 +134,21 @@ def triangulate_point(
     )  # 4×1 homogeneous
     X = X_hom[:3] / X_hom[3]
     return X.flatten()
+
+
+def reprojection_error(X: np.ndarray, pt0: tuple, pt1: tuple, stereo) -> float:
+    """
+    Project the 3D point back into both cameras and return the worse pixel miss.
+
+    If both detections really are the same object, the triangulated point lands on
+    top of both of them (a few px, limited by calibration). A large value means the
+    cameras locked onto different things (e.g. the drone in one view, a hand in the other).
+    """
+    obj = np.asarray(X, np.float64).reshape(1, 1, 3)
+    zero = np.zeros(3)
+    p0, _ = cv2.projectPoints(obj, zero, zero, stereo["K0"], stereo["dist0"])
+    rvec1, _ = cv2.Rodrigues(stereo["R"])
+    p1, _ = cv2.projectPoints(obj, rvec1, stereo["T"], stereo["K1"], stereo["dist1"])
+    e0 = np.linalg.norm(p0.ravel() - np.asarray(pt0, float))
+    e1 = np.linalg.norm(p1.ravel() - np.asarray(pt1, float))
+    return float(max(e0, e1))

@@ -42,7 +42,8 @@ import cv2
 import numpy as np
 
 from dashboard import Dashboard
-from triangulate_utils import load_calibration, detect_ball, triangulate_point, MotionDetector
+from triangulate_utils import (load_calibration, detect_ball, triangulate_point,
+                               reprojection_error, MotionDetector)
 
 
 SMOOTHING = 0.3  # EMA weight for speed estimates
@@ -63,6 +64,8 @@ def main() -> None:
     parser.add_argument("--detector", choices=["motion", "color"], default="motion")
     parser.add_argument("--min-area", type=int, default=80,
                         help="Smallest moving blob in pixels (motion mode)")
+    parser.add_argument("--max-reproj", type=float, default=25.0,
+                        help="Reject 3D points whose reprojection error exceeds this (px)")
     parser.add_argument("--calib_dir", type=Path, default=Path("calibration"))
     parser.add_argument("--log", type=Path, default=Path("tracking_log.csv"))
     args = parser.parse_args()
@@ -87,7 +90,7 @@ def main() -> None:
     log_fh = open(args.log, "w", newline="")
     writer = csv.writer(log_fh)
     writer.writerow(["timestamp_s", "x_mm", "y_mm", "z_mm", "range_mm",
-                     "speed_mps", "closing_mps", "detected"])
+                     "speed_mps", "closing_mps", "reproj_px", "detected"])
 
     try:
         while True:
@@ -104,10 +107,13 @@ def main() -> None:
             mask1, center1 = det1(frame1)
 
             pos3d = None
+            reproj = None
             if center0 is not None and center1 is not None:
                 pos3d = triangulate_point(center0, center1, K0, dist0, K1, dist1, P0, P1)
-                # A point behind the camera means the two detections weren't the same object
-                if pos3d[2] <= 0:
+                reproj = reprojection_error(pos3d, center0, center1, stereo)
+                # Behind the camera, or not landing on both detections: the two
+                # cameras locked onto different objects, so don't report a position.
+                if pos3d[2] <= 0 or reproj > args.max_reproj:
                     pos3d = None
 
             if pos3d is not None:
@@ -121,14 +127,15 @@ def main() -> None:
                 prev = (t, pos3d)
                 writer.writerow([f"{t:.4f}", f"{pos3d[0]:.1f}", f"{pos3d[1]:.1f}",
                                  f"{pos3d[2]:.1f}", f"{rng:.1f}", f"{speed:.3f}",
-                                 f"{closing:.3f}", "1"])
+                                 f"{closing:.3f}", f"{reproj:.2f}", "1"])
             else:
                 prev = None
                 speed = closing = 0.0
-                writer.writerow([f"{t:.4f}", "", "", "", "", "", "", "0"])
+                writer.writerow([f"{t:.4f}", "", "", "", "", "", "",
+                                 "" if reproj is None else f"{reproj:.2f}", "0"])
 
             canvas = dash.render(t, frame0, frame1, mask0, mask1, center0, center1,
-                                 pos3d, speed, closing, args.detector, show_mask)
+                                 pos3d, speed, closing, args.detector, show_mask, reproj)
             cv2.imshow(Dashboard.WINDOW, canvas)
 
             key = cv2.waitKey(1) & 0xFF
