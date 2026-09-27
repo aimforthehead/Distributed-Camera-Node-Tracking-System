@@ -125,7 +125,7 @@ def print_report(results: list[dict], square: float) -> None:
         return
     print("\nProposal line:")
     print(f"  \"At {min(rng):.1f}–{max(rng):.1f} m, the two-camera prototype measured known "
-          f"lengths to within {span:.1f} % ({spacing:.1f} mm mean corner error).\"")
+          f"lengths to within {span:.2f} % ({spacing:.2f} mm mean corner error).\"")
 
 
 def main() -> None:
