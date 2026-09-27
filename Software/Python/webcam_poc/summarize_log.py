@@ -55,8 +55,11 @@ def main() -> None:
 
     print(f"Log: {args.log}")
     print(f"  Duration          : {dur:.1f} s, {n} frames ({fps:.1f} fps)")
+    nm = int(measured.sum())
     print(f"  Target tracked    : {nd} frames ({100 * nd / n:.0f}%), in {len(segments)} tracks, "
           f"longest {max(segments, default=0) / max(fps, 1e-9):.1f} s")
+    print(f"  Actually measured : {nm} frames ({100 * nm / n:.0f}%); the rest of the tracked frames "
+          f"were predicted")
     print(f"  Rejected (no match): {rejected} frames where both cameras saw something but it didn't match")
     if int(np.sum(det & ~measured)):
         print(f"  Predicted         : {int(np.sum(det & ~measured))} frames bridged by the tracking filter")

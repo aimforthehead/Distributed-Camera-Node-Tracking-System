@@ -67,6 +67,10 @@ def main() -> None:
                         help="Smallest moving blob in pixels (motion mode)")
     parser.add_argument("--max-reproj", type=float, default=25.0,
                         help="Reject 3D points whose reprojection error exceeds this (px)")
+    parser.add_argument("--max-range", type=float, default=4.0,
+                        help="Ignore positions farther than this (m); raise it outdoors")
+    parser.add_argument("--max-speed", type=float, default=3.0,
+                        help="Largest plausible target speed (m/s)")
     parser.add_argument("--calib_dir", type=Path, default=Path("calibration"))
     parser.add_argument("--log", type=Path, default=Path("tracking_log.csv"))
     args = parser.parse_args()
@@ -82,7 +86,8 @@ def main() -> None:
     if "img_size1" in stereo.files:
         check_frame_size(cap1, stereo["img_size1"], f"camera {args.cam1}")
     det0, det1 = make_detectors(args, hsv_params)
-    tracker = StereoTracker(stereo, max_reproj=args.max_reproj)
+    tracker = StereoTracker(stereo, max_reproj=args.max_reproj,
+                            max_range_mm=args.max_range * 1000, max_speed_mps=args.max_speed)
     dash = Dashboard(stereo)
     show_mask = False
 
