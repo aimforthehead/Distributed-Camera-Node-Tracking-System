@@ -47,7 +47,7 @@ import cv2
 import numpy as np
 
 from triangulate_utils import (MotionDetector, triangulate_point, reprojection_error,
-                               print_rig_geometry, beep)
+                               print_rig_geometry, beep, check_frame_size)
 
 WARMUP_FRAMES = 30
 GRID = 4
@@ -177,6 +177,8 @@ def main() -> None:
     (K0, d0, size0), (K1, d1, _) = intr
 
     caps = [cv2.VideoCapture(args.cam0), cv2.VideoCapture(args.cam1)]
+    for cap, (_, _, size), idx in zip(caps, intr, (args.cam0, args.cam1)):
+        check_frame_size(cap, size, f"camera {idx}")
     dets = [MotionDetector(min_area=args.min_area), MotionDetector(min_area=args.min_area)]
     s0: list = []
     s1: list = []
@@ -328,7 +330,7 @@ def main() -> None:
         print("  (previous stereo.npz kept as stereo_backup.npz)")
     np.savez(out, K0=K0, dist0=d0, K1=K1, dist1=d1, R=r["R"], T=r["T"], E=r["E"], F=r["F"],
              P0=r["P0"], P1=r["P1"], baseline_mm=np.array([args.baseline_mm]),
-             img_size=np.array(size0), method=np.array("motion"))
+             img_size=np.array(size0), img_size1=np.array(intr[1][2]), method=np.array("motion"))
     print(f"RESULT: {'GOOD' if r['rms'] < 2 and ratio > 0.8 else 'OK'} — saved → {out}")
 
 

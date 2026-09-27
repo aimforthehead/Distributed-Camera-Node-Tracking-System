@@ -258,3 +258,18 @@ def draw_auto_status(img: np.ndarray, state: str, progress: float, n: int, targe
     cv2.rectangle(img, (int(20 * sc), y), (int(20 * sc) + bar_w, y + int(10 * sc)), color, -1)
     if state == "captured":
         cv2.rectangle(img, (0, 0), (w - 1, h - 1), (0, 230, 0), max(6, int(12 * sc)))
+
+
+def check_frame_size(cap, expected, label: str) -> None:
+    """Stop early if a camera's resolution differs from the one it was calibrated at."""
+    ok, frame = cap.read()
+    if not ok:
+        print(f"ERROR: {label} gives no image — is it unplugged?")
+        sys.exit(1)
+    h, w = frame.shape[:2]
+    ew, eh = (int(v) for v in expected)
+    if (w, h) != (ew, eh):
+        print(f"ERROR: {label} gives {w}x{h} but its calibration is for {ew}x{eh}.")
+        print("  The camera numbers probably changed (replug). Run 01_check_cameras.py,")
+        print("  find which index is which camera, and pass the right --cam0/--cam1.")
+        sys.exit(1)

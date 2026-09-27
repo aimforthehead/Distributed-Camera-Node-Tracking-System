@@ -32,7 +32,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from triangulate_utils import print_rig_geometry, AutoCapture, beep, draw_auto_status
+from triangulate_utils import (print_rig_geometry, AutoCapture, beep, draw_auto_status,
+                               check_frame_size)
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -49,6 +50,8 @@ def main() -> None:
     parser.add_argument("--calib_dir", type=Path, default=Path("calibration"))
     parser.add_argument("--target", type=int, default=15, help="Pairs before auto-computing")
     parser.add_argument("--manual", action="store_true", help="Disable auto-capture")
+    parser.add_argument("--baseline-mm", type=float, default=None,
+                        help="Ruler-measured lens-to-lens distance, to cross-check the result")
     args = parser.parse_args()
 
     board_w, board_h = args.board
@@ -77,6 +80,8 @@ def main() -> None:
 
     cap0 = cv2.VideoCapture(args.cam0)
     cap1 = cv2.VideoCapture(args.cam1)
+    check_frame_size(cap0, d0["img_size"], f"camera {args.cam0}")
+    check_frame_size(cap1, d1["img_size"], f"camera {args.cam1}")
     subpix = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
     print(f"Board {board_w}×{board_h}  |  Square {sq} mm")
@@ -173,6 +178,13 @@ def main() -> None:
     baseline = float(np.linalg.norm(T))
     print(f"  Stereo RMS error : {rms:.4f} px")
     print(f"  Baseline         : {baseline:.1f} mm  ({baseline/10:.1f} cm)")
+    if args.baseline_mm:
+        diff = (baseline - args.baseline_mm) / args.baseline_mm
+        print(f"  Ruler baseline   : {args.baseline_mm:.0f} mm  → calibration differs by {diff:+.1%}")
+        if abs(diff) > 0.05:
+            print(f"WARNING: >5% off. Either the square size is wrong (it would be "
+                  f"{sq * args.baseline_mm / baseline:.2f} mm if the ruler is right) or the ruler "
+                  f"measurement is not lens-centre to lens-centre.")
 
     print_rig_geometry(R, T)
 
@@ -191,7 +203,7 @@ def main() -> None:
              R=R, T=T, E=E, F=F,
              P0=P0, P1=P1,
              baseline_mm=np.array([baseline]),
-             img_size=np.array(img_size))
+             img_size=np.array(img_size), img_size1=d1["img_size"])
     print(f"Saved → {out}")
     print("\nCoordinate system from now on:")
     print("  Origin = camera 0 optical centre")

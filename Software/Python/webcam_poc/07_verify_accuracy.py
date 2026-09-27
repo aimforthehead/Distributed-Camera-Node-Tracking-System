@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 
 from triangulate_utils import (load_calibration, triangulate_point, reprojection_error,
-                               AutoCapture, beep, draw_auto_status)
+                               AutoCapture, beep, draw_auto_status, check_frame_size)
 
 
 def parse_board(s: str) -> tuple[int, int]:
@@ -130,6 +130,9 @@ def main() -> None:
     board = args.board
     cap0 = cv2.VideoCapture(args.cam0)
     cap1 = cv2.VideoCapture(args.cam1)
+    check_frame_size(cap0, stereo["img_size"], f"camera {args.cam0}")
+    if "img_size1" in stereo.files:
+        check_frame_size(cap1, stereo["img_size1"], f"camera {args.cam1}")
     subpix = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
     results: list[dict] = []
 

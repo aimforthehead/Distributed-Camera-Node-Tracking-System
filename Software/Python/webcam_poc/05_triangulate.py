@@ -43,7 +43,7 @@ import numpy as np
 
 from dashboard import Dashboard
 from triangulate_utils import (load_calibration, detect_ball, triangulate_point,
-                               reprojection_error, MotionDetector)
+                               reprojection_error, MotionDetector, check_frame_size)
 
 
 SMOOTHING = 0.3  # EMA weight for speed estimates
@@ -80,6 +80,9 @@ def main() -> None:
 
     cap0 = cv2.VideoCapture(args.cam0)
     cap1 = cv2.VideoCapture(args.cam1)
+    check_frame_size(cap0, stereo["img_size"], f"camera {args.cam0}")
+    if "img_size1" in stereo.files:
+        check_frame_size(cap1, stereo["img_size1"], f"camera {args.cam1}")
     det0, det1 = make_detectors(args, hsv_params)
     dash = Dashboard(stereo)
 
