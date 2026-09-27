@@ -47,19 +47,25 @@ class MotionDetector:
         self.min_area = min_area
         self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
 
-    def __call__(self, frame: np.ndarray) -> tuple[np.ndarray, tuple | None]:
+    def candidates(self, frame: np.ndarray, k: int = 3) -> tuple[np.ndarray, list[tuple]]:
+        """Mask and the centres of the k largest moving blobs, largest first."""
         blurred = cv2.GaussianBlur(frame, (5, 5), 0)
         mask = self.bg.apply(blurred)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
         # Merge fragments of one object (propellers, arms) into a single blob
         mask = cv2.dilate(mask, self.kernel, iterations=2)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = [c for c in contours if cv2.contourArea(c) >= self.min_area]
-        if not contours:
-            return mask, None
-        best = max(contours, key=cv2.contourArea)
-        m = cv2.moments(best)
-        return mask, (m["m10"] / m["m00"], m["m01"] / m["m00"])
+        contours = sorted((c for c in contours if cv2.contourArea(c) >= self.min_area),
+                          key=cv2.contourArea, reverse=True)[:k]
+        centres = []
+        for c in contours:
+            m = cv2.moments(c)
+            centres.append((m["m10"] / m["m00"], m["m01"] / m["m00"]))
+        return mask, centres
+
+    def __call__(self, frame: np.ndarray) -> tuple[np.ndarray, tuple | None]:
+        mask, centres = self.candidates(frame, k=1)
+        return mask, (centres[0] if centres else None)
 
 
 def detect_ball(frame: np.ndarray, hsv_params: dict) -> tuple[np.ndarray | None, tuple | None]:

@@ -42,18 +42,19 @@ import cv2
 import numpy as np
 
 from dashboard import Dashboard
-from triangulate_utils import (load_calibration, detect_ball, triangulate_point,
-                               reprojection_error, MotionDetector, check_frame_size)
-
-
-SMOOTHING = 0.3  # EMA weight for speed estimates
+from tracking import StereoTracker
+from triangulate_utils import load_calibration, detect_ball, MotionDetector, check_frame_size
 
 
 def make_detectors(args, hsv_params):
+    """Each detector returns (mask, [candidate centres])."""
     if args.detector == "motion":
-        return (MotionDetector(min_area=args.min_area),
-                MotionDetector(min_area=args.min_area))
-    color = lambda f: detect_ball(f, hsv_params)  # noqa: E731
+        m0, m1 = MotionDetector(min_area=args.min_area), MotionDetector(min_area=args.min_area)
+        return (lambda f: m0.candidates(f, k=3)), (lambda f: m1.candidates(f, k=3))
+
+    def color(f):
+        mask, c = detect_ball(f, hsv_params)
+        return mask, ([c] if c is not None else [])
     return color, color
 
 
@@ -71,9 +72,6 @@ def main() -> None:
     args = parser.parse_args()
 
     stereo, hsv_params = load_calibration(args.calib_dir, need_hsv=args.detector == "color")
-    K0, dist0 = stereo["K0"], stereo["dist0"]
-    K1, dist1 = stereo["K1"], stereo["dist1"]
-    P0, P1 = stereo["P0"], stereo["P1"]
     print(f"Calibration loaded. Baseline = {float(stereo['baseline_mm'][0]):.1f} mm")
     print(f"Detector: {args.detector}")
     print("Q quit | M mask | R reset background | F fullscreen | S screenshot\n")
@@ -84,16 +82,14 @@ def main() -> None:
     if "img_size1" in stereo.files:
         check_frame_size(cap1, stereo["img_size1"], f"camera {args.cam1}")
     det0, det1 = make_detectors(args, hsv_params)
+    tracker = StereoTracker(stereo, max_reproj=args.max_reproj)
     dash = Dashboard(stereo)
-
     show_mask = False
-    prev: tuple[float, np.ndarray] | None = None
-    speed = closing = 0.0
 
     log_fh = open(args.log, "w", newline="")
     writer = csv.writer(log_fh)
-    writer.writerow(["timestamp_s", "x_mm", "y_mm", "z_mm", "range_mm",
-                     "speed_mps", "closing_mps", "reproj_px", "detected"])
+    writer.writerow(["timestamp_s", "x_mm", "y_mm", "z_mm", "range_mm", "speed_mps",
+                     "closing_mps", "reproj_px", "detected", "sync_lag_ms"])
 
     try:
         while True:
@@ -106,39 +102,28 @@ def main() -> None:
                 break
 
             t = time.time()
-            mask0, center0 = det0(frame0)
-            mask1, center1 = det1(frame1)
+            mask0, cands0 = det0(frame0)
+            mask1, cands1 = det1(frame1)
+            r = tracker.update(t, cands0, cands1, frame1.shape[1])
+            pos, reproj = r["pos"], r["reproj"]
+            coasting = r["state"] in ("coasting", "rejected")
 
-            pos3d = None
-            reproj = None
-            if center0 is not None and center1 is not None:
-                pos3d = triangulate_point(center0, center1, K0, dist0, K1, dist1, P0, P1)
-                reproj = reprojection_error(pos3d, center0, center1, stereo)
-                # Behind the camera, or not landing on both detections: the two
-                # cameras locked onto different objects, so don't report a position.
-                if pos3d[2] <= 0 or reproj > args.max_reproj:
-                    pos3d = None
-
-            if pos3d is not None:
-                rng = float(np.linalg.norm(pos3d))
-                if prev is not None and t - prev[0] > 1e-3:
-                    dt = t - prev[0]
-                    inst_speed = np.linalg.norm(pos3d - prev[1]) / dt / 1000.0
-                    inst_closing = (np.linalg.norm(prev[1]) - rng) / dt / 1000.0
-                    speed = (1 - SMOOTHING) * speed + SMOOTHING * inst_speed
-                    closing = (1 - SMOOTHING) * closing + SMOOTHING * inst_closing
-                prev = (t, pos3d)
-                writer.writerow([f"{t:.4f}", f"{pos3d[0]:.1f}", f"{pos3d[1]:.1f}",
-                                 f"{pos3d[2]:.1f}", f"{rng:.1f}", f"{speed:.3f}",
-                                 f"{closing:.3f}", f"{reproj:.2f}", "1"])
+            # detected: 1 = measured this frame, 2 = predicted through a short dropout, 0 = none
+            flag = "0" if pos is None else ("2" if coasting else "1")
+            if pos is not None:
+                writer.writerow([f"{t:.4f}", f"{pos[0]:.1f}", f"{pos[1]:.1f}", f"{pos[2]:.1f}",
+                                 f"{np.linalg.norm(pos):.1f}", f"{r['speed']:.3f}", f"{r['closing']:.3f}",
+                                 "" if reproj is None else f"{reproj:.2f}", flag, f"{r['lag_ms']:.0f}"])
             else:
-                prev = None
-                speed = closing = 0.0
                 writer.writerow([f"{t:.4f}", "", "", "", "", "", "",
-                                 "" if reproj is None else f"{reproj:.2f}", "0"])
+                                 "" if reproj is None else f"{reproj:.2f}", "0", f"{r['lag_ms']:.0f}"])
 
-            canvas = dash.render(t, frame0, frame1, mask0, mask1, center0, center1,
-                                 pos3d, speed, closing, args.detector, show_mask, reproj)
+            c0 = r["c0"] or (cands0[0] if cands0 else None)
+            c1 = r["c1"] or (cands1[0] if cands1 else None)
+            canvas = dash.render(t, frame0, frame1, mask0, mask1, c0, c1, pos, r["speed"],
+                                 r["closing"], args.detector, show_mask,
+                                 reproj if r["raw"] is not None or r["no_match"] else None,
+                                 coasting=coasting, lag_ms=r["lag_ms"])
             cv2.imshow(Dashboard.WINDOW, canvas)
 
             key = cv2.waitKey(1) & 0xFF
@@ -161,7 +146,8 @@ def main() -> None:
         cap0.release()
         cap1.release()
         cv2.destroyAllWindows()
-        print(f"Log saved → {args.log}")
+        print(f"Log saved → {args.log}  (camera sync offset {tracker.lag * 1000:+.0f} ms, "
+              f"{tracker.glitches} impossible jumps rejected)")
 
 
 if __name__ == "__main__":

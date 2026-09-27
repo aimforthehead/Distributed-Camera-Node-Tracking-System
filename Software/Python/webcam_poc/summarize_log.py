@@ -29,7 +29,8 @@ def main() -> None:
         return
     t = np.array([float(r["timestamp_s"]) for r in rows])
     t -= t[0]
-    det = np.array([r["detected"] == "1" for r in rows])
+    det = np.array([r["detected"] in ("1", "2") for r in rows])
+    measured = np.array([r["detected"] == "1" for r in rows])
     reproj = np.array([float(r["reproj_px"]) if r.get("reproj_px") else np.nan for r in rows])
 
     def col(name):
@@ -57,6 +58,10 @@ def main() -> None:
     print(f"  Target tracked    : {nd} frames ({100 * nd / n:.0f}%), in {len(segments)} tracks, "
           f"longest {max(segments, default=0) / max(fps, 1e-9):.1f} s")
     print(f"  Rejected (no match): {rejected} frames where both cameras saw something but it didn't match")
+    if int(np.sum(det & ~measured)):
+        print(f"  Predicted         : {int(np.sum(det & ~measured))} frames bridged by the tracking filter")
+    if rows[-1].get("sync_lag_ms"):
+        print(f"  Camera sync offset: {float(rows[-1]['sync_lag_ms']):+.0f} ms (estimated and corrected)")
     if nd:
         p = np.column_stack([x, y, z])[det]
         jumps = np.linalg.norm(np.diff(p, axis=0), axis=1)
@@ -67,8 +72,8 @@ def main() -> None:
         print(f"  Top speed         : {np.nanmax(speed[det]):.2f} m/s")
         print(f"  Max approach speed: {np.nanmax(closing[det]):.2f} m/s "
               f"({int(np.sum(closing[det] > 0.1))} frames flagged APPROACHING)")
-        print(f"  Match error       : median {np.nanmedian(reproj[det]):.1f} px, "
-              f"95th percentile {np.nanpercentile(reproj[det], 95):.1f} px")
+        print(f"  Match error       : median {np.nanmedian(reproj[measured]):.1f} px, "
+              f"95th percentile {np.nanpercentile(reproj[measured], 95):.1f} px")
         print(f"  Glitches (>{JUMP_MM} mm jump between frames): {int(np.sum(jumps > JUMP_MM))}")
 
     try:

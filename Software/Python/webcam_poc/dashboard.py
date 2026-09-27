@@ -92,7 +92,8 @@ class Dashboard:
 
     # ------------------------------------------------------------------ render
     def render(self, t, frame0, frame1, mask0, mask1, c0, c1, pos_mm,
-               speed, closing, detector, show_mask, reproj=None) -> np.ndarray:
+               speed, closing, detector, show_mask, reproj=None,
+               coasting=False, lag_ms=None) -> np.ndarray:
         if self.last_t is not None and t > self.last_t:
             inst = 1.0 / (t - self.last_t)
             self.fps = inst if self.fps == 0 else 0.9 * self.fps + 0.1 * inst
@@ -105,7 +106,9 @@ class Dashboard:
         while self.range_hist and self.range_hist[0][0] < t - RANGE_SPAN_S:
             self.range_hist.popleft()
 
-        if pos is None and reproj is not None:
+        if pos is not None and coasting:
+            status, status_color = "PREDICTING", AMBER
+        elif pos is None and reproj is not None:
             status, status_color = "NO MATCH", AMBER
         elif pos is None:
             status, status_color = "SEARCHING", MUTED
@@ -124,7 +127,8 @@ class Dashboard:
         canvas[:TH, TW:] = self._camera_tile(v1, c1, "CAM 1", target_color)
         canvas[TH:, :TW] = self._radar(pos, target_color, t)
         canvas[TH:, TW:] = self._telemetry(pos, speed, closing, status, status_color,
-                                          c0 is not None, c1 is not None, detector, t, reproj)
+                                          c0 is not None, c1 is not None, detector, t, reproj,
+                                          lag_ms)
 
         cv2.line(canvas, (TW, 0), (TW, H), GRID_FAINT, 2)
         cv2.line(canvas, (0, TH), (W, TH), GRID_FAINT, 2)
@@ -225,7 +229,7 @@ class Dashboard:
         return img
 
     def _telemetry(self, pos, speed, closing, status, status_color,
-                   lock0, lock1, detector, t, reproj=None) -> np.ndarray:
+                   lock0, lock1, detector, t, reproj=None, lag_ms=None) -> np.ndarray:
         img = np.full((TH, TW, 3), PANEL, np.uint8)
         _text(img, "TRACK 01", (20, 30), 0.7, TEXT, 1, FONT_B)
 
@@ -241,7 +245,8 @@ class Dashboard:
 
         sys_line = (f"CAM0 {'LOCK' if lock0 else '----'}   CAM1 {'LOCK' if lock1 else '----'}   "
                     f"{self.fps:4.1f} FPS   {detector.upper()}   BASELINE {self.baseline_mm:.0f} mm   "
-                    f"MATCH ERR {'--' if reproj is None else f'{reproj:.1f} px'}")
+                    f"MATCH ERR {'--' if reproj is None else f'{reproj:.1f} px'}"
+                    f"{'' if lag_ms is None else f'   SYNC {lag_ms:+.0f} ms'}")
         _text(img, sys_line, (20, 60), 0.42, MUTED)
         cv2.line(img, (20, 72), (TW - 20, 72), GRID_FAINT, 1)
 
