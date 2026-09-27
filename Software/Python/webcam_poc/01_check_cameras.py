@@ -3,7 +3,7 @@
 01_check_cameras.py — Verify both webcams are accessible and show live side-by-side feeds.
 
 Usage:
-    python 01_check_cameras.py                  # auto-detect first two cameras
+    python 01_check_cameras.py                  # show ALL cameras labelled by index
     python 01_check_cameras.py --cam0 0 --cam1 2
 
 Controls:
@@ -30,11 +30,50 @@ def find_cameras(max_index: int = 8) -> list[int]:
     return available
 
 
+def show_all(indices: list[int]) -> None:
+    """Show every camera in a grid, labelled with its index, to tell them apart."""
+    caps = {i: cv2.VideoCapture(i) for i in indices}
+    for i, cap in caps.items():
+        print(f"  index {i}: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}×"
+              f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+    print("\nCover each lens with a finger to see which index it is. Q = quit")
+    tw, th = 480, 270
+    cols = 2 if len(caps) <= 4 else 3
+    while True:
+        tiles = []
+        for i, cap in caps.items():
+            ok, f = cap.read()
+            tile = np.zeros((th, tw, 3), np.uint8) if not ok else cv2.resize(f, (tw, th))
+            cv2.rectangle(tile, (0, 0), (tw, 44), (0, 0, 0), -1)
+            label = f"INDEX {i}  {f.shape[1]}x{f.shape[0]}" if ok else f"INDEX {i}  no frame"
+            cv2.putText(tile, label, (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 230, 0), 2)
+            tiles.append(tile)
+        while len(tiles) % cols:
+            tiles.append(np.zeros((th, tw, 3), np.uint8))
+        rows = [np.hstack(tiles[r:r + cols]) for r in range(0, len(tiles), cols)]
+        cv2.imshow("All cameras  |  Q = quit", np.vstack(rows))
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+    for cap in caps.values():
+        cap.release()
+    cv2.destroyAllWindows()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cam0", type=int, default=None)
     parser.add_argument("--cam1", type=int, default=None)
     args = parser.parse_args()
+
+    if args.cam0 is None and args.cam1 is None:
+        print("Scanning for cameras (indices 0–7)...")
+        found = find_cameras()
+        print(f"Found cameras at indices: {found}")
+        if not found:
+            print("ERROR: no cameras found")
+            sys.exit(1)
+        show_all(found)
+        return
 
     if args.cam0 is None or args.cam1 is None:
         print("Scanning for cameras (indices 0–7)...")
